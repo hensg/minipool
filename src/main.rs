@@ -70,8 +70,9 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
+    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     info!("Listening on {}", config.bind_addr);
-    axum::serve(tokio::net::TcpListener::bind(config.bind_addr).await?, app).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -146,7 +147,6 @@ async fn get_block_raw(
     match BlockHash::from_str(&hash) {
         Ok(block_hash) => {
             let rpc = state.rpc.clone();
-            let block_hash = block_hash;
             match tokio::task::spawn_blocking(move || rpc.get_block_hex(&block_hash)).await {
                 Ok(Ok(block_hex)) => (StatusCode::OK, block_hex).into_response(),
                 Ok(Err(e)) => {
