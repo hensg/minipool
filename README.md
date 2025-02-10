@@ -81,6 +81,28 @@ cargo clippy
 }
 ```
 
+If you are running [nix-bitcoin](https://github.com/fort-nix/nix-bitcoin/) this cofig snippet should work out of the box:
+
+```nix
+  users.users.minipool.extraGroups = [ "bitcoinrpc-public" ];
+  services.minipool = {
+    enable = true;
+    bitcoinRpcUrl = "http://127.0.0.1:8332";
+    bitcoinRpcUser = "public";
+    bitcoinRpcPassFile = "/etc/nix-bitcoin-secrets/bitcoin-rpcpassword-public";
+  };
+
+  services.nginx = {
+    virtualHosts."minipool.example.com" = {
+      forceSSL = true;
+      enableACME = true;
+      locations."/" = {
+          proxyPass = "http://127.0.0.1:3000";
+      };
+    };
+  };
+```
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
