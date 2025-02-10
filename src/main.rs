@@ -1,19 +1,22 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Result;
+use axum::routing::MethodRouter;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{Html, IntoResponse, Redirect},
     routing::get,
     Json, Router,
 };
 use bitcoincore_rpc::bitcoin::BlockHash;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use clap::Parser;
+use std::convert::Infallible;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
@@ -46,6 +49,7 @@ struct Config {
 #[derive(Clone)]
 struct AppState {
     rpc: Arc<Client>,
+    routes: Arc<Vec<RouteInfo>>,
 }
 
 #[tokio::main]
@@ -60,13 +64,43 @@ async fn main() -> Result<()> {
         Auth::UserPass(config.bitcoin_rpc_user, config.bitcoin_rpc_pass),
     )?;
 
-    let state = AppState { rpc: Arc::new(rpc) };
+    let routes = vec![
+        RouteInfo::new(
+            "/api/blocks/tip/height",
+            "Get the current blockchain tip height.",
+            get(get_tip_height),
+        ),
+        RouteInfo::new(
+            "/api/block-height/{height}",
+            "Get the block hash for a specific height.",
+            get(get_block_by_height),
+        ),
+        RouteInfo::new(
+            "/api/fee-estimates",
+            "Get fee estimates for different confirmation targets.",
+            get(get_fee_estimates),
+        ),
+        RouteInfo::new(
+            "/api/block/{hash}/raw",
+            "Get the raw block data for a specific block hash.",
+            get(get_block_raw),
+        ),
+    ];
 
-    let app = Router::new()
-        .route("/api/blocks/tip/height", get(get_tip_height))
-        .route("/api/block-height/{height}", get(get_block_by_height))
-        .route("/api/fee-estimates", get(get_fee_estimates))
-        .route("/api/block/{hash}/raw", get(get_block_raw))
+    let state = AppState {
+        rpc: Arc::new(rpc),
+        routes: Arc::new(routes.clone()),
+    };
+
+    let mut app = Router::new().route("/", get(index));
+
+    // Add all routes from the routes vec
+    for route in routes {
+        app = app.route(route.path, route.handler);
+    }
+
+    let app = app
+        .fallback(fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -104,7 +138,10 @@ async fn get_block_by_height(
             (StatusCode::NOT_FOUND, "Block not found").into_response()
         }
         Err(e) => {
-            warn!("Task failed when getting block hash for height {}: {}", height, e);
+            warn!(
+                "Task failed when getting block hash for height {}: {}",
+                height, e
+            );
             (StatusCode::INTERNAL_SERVER_ERROR, "RPC error").into_response()
         }
     }
@@ -112,10 +149,16 @@ async fn get_block_by_height(
 
 fn get_fee_rate_blocking(client: &Client, blocks: u16) -> Result<f64, bitcoincore_rpc::Error> {
     let estimate = client.estimate_smart_fee(blocks, None)?;
-    Ok(estimate.fee_rate.map(|fee_rate| fee_rate.to_btc()).unwrap_or_else(|| {
-        warn!("No fee rate estimate available for {} blocks, using default", blocks);
-        0.0001
-    }))
+    Ok(estimate
+        .fee_rate
+        .map(|fee_rate| fee_rate.to_btc())
+        .unwrap_or_else(|| {
+            warn!(
+                "No fee rate estimate available for {} blocks, using default",
+                blocks
+            );
+            0.0001
+        }))
 }
 
 async fn get_fee_estimates(State(state): State<AppState>) -> impl IntoResponse {
@@ -154,7 +197,10 @@ async fn get_block_raw(
                     (StatusCode::NOT_FOUND, "Block not found").into_response()
                 }
                 Err(e) => {
-                    warn!("Task failed when getting raw block for hash {}: {}", hash, e);
+                    warn!(
+                        "Task failed when getting raw block for hash {}: {}",
+                        hash, e
+                    );
                     (StatusCode::INTERNAL_SERVER_ERROR, "RPC error").into_response()
                 }
             }
@@ -164,4 +210,79 @@ async fn get_block_raw(
             (StatusCode::BAD_REQUEST, "Invalid block hash").into_response()
         }
     }
+}
+
+#[derive(Clone)]
+struct RouteInfo {
+    path: &'static str,
+    description: &'static str,
+    handler: MethodRouter<AppState, Infallible>,
+}
+
+impl RouteInfo {
+    fn new(
+        path: &'static str,
+        description: &'static str,
+        handler: MethodRouter<AppState, Infallible>,
+    ) -> Self {
+        Self {
+            path,
+            description,
+            handler,
+        }
+    }
+}
+
+async fn index(State(state): State<AppState>) -> impl IntoResponse {
+    let mut routes_html = String::with_capacity(1024);
+    for route in state.routes.iter() {
+        write!(
+            routes_html,
+            r#"
+            <div class="endpoint">
+                <div class="path">GET {}</div>
+                <p>{}</p>
+            </div>
+            "#,
+            route.path, route.description
+        )
+        .expect("writing to string cannot fail");
+    }
+
+    Html(format!(
+        r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Minipool API Documentation</title>
+            <style>
+                body {{
+                    font-family: system-ui, -apple-system, sans-serif;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    padding: 2rem;
+                    line-height: 1.6;
+                }}
+                h1 {{ color: #2563eb; }}
+                .endpoint {{
+                    background: #f1f5f9;
+                    padding: 1rem;
+                    border-radius: 0.5rem;
+                    margin: 1rem 0;
+                }}
+                .path {{ font-family: monospace; }}
+            </style>
+        </head>
+        <body>
+            <h1>Minipool API Endpoints</h1>
+            {}
+        </body>
+        </html>
+        "#,
+        routes_html
+    ))
+}
+
+async fn fallback() -> impl IntoResponse {
+    Redirect::temporary("/")
 }
