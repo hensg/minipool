@@ -64,9 +64,9 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/api/blocks/tip/height", get(get_tip_height))
-        .route("/api/block-height/:height", get(get_block_by_height))
+        .route("/api/block-height/{height}", get(get_block_by_height))
         .route("/api/fee-estimates", get(get_fee_estimates))
-        .route("/api/block/:hash/raw", get(get_block_raw))
+        .route("/api/block/{hash}/raw", get(get_block_raw))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

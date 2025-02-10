@@ -43,18 +43,6 @@
         minipool = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
         });
-
-        # Create wrapper script
-        minipoolWrapper = pkgs.writeScriptBin "minipool-wrapper" ''
-          #!${pkgs.bash}/bin/bash
-          
-          if [[ -f "$BITCOIN_RPC_PASS_FILE" ]]; then
-            export BITCOIN_RPC_PASS="$(cat "$BITCOIN_RPC_PASS_FILE")"
-          fi
-          
-          exec ${minipool}/bin/minipool "$@"
-        '';
-
       in
       {
         packages = {
@@ -95,6 +83,16 @@
           with lib;
           let
             cfg = config.services.minipool;
+
+          # Create wrapper script
+          minipoolWrapper = pkgs.writeScriptBin "minipool-wrapper" ''
+            #!${pkgs.bash}/bin/bash
+
+            set -euo pipefail
+            
+            export BITCOIN_RPC_PASS="$(cat "$BITCOIN_RPC_PASS_FILE")"
+            exec ${self.packages.${pkgs.system}.default}/bin/minipool "$@"
+          '';
           in
           {
             options.services.minipool = {
@@ -104,6 +102,18 @@
                 type = types.str;
                 default = "127.0.0.1:3000";
                 description = "Address and port to bind the HTTP server to";
+              };
+
+              user = mkOption {
+                type = types.str;
+                default = "minipool";
+                description = "User account under which minipool runs";
+              };
+
+              group = mkOption {
+                type = types.str;
+                default = "minipool";
+                description = "Group account under which minipool runs";
               };
 
               bitcoinRpcUrl = mkOption {
@@ -124,14 +134,22 @@
             };
 
             config = mkIf cfg.enable {
+              users.groups.${cfg.group} = {};
+              users.users.${cfg.user} = {
+                description = "minipool service user";
+                group = cfg.group;
+                isSystemUser = true;
+              };
+
               systemd.services.minipool = {
                 description = "minipool Bitcoin mempool API service";
                 wantedBy = [ "multi-user.target" ];
                 after = [ "network.target" ];
 
                 serviceConfig = {
-                  ExecStart = "${self.packages.${pkgs.system}.default}/bin/minipool-wrapper";
-                  DynamicUser = true;
+                  ExecStart = "${minipoolWrapper}/bin/minipool-wrapper";
+                  User = cfg.user;
+                  Group = cfg.group;
                   Restart = "always";
                   RestartSec = "10s";
                   
@@ -165,13 +183,9 @@
                     "BIND_ADDR=${cfg.bindAddr}"
                     "BITCOIN_RPC_URL=${cfg.bitcoinRpcUrl}"
                     "BITCOIN_RPC_USER=${cfg.bitcoinRpcUser}"
-                    "BITCOIN_RPC_PASS_FILE=%d/bitcoin-rpc-pass"
-                  ];
-                  EnvironmentFile = null;
-
-                  # Credential files
-                  LoadCredential = [
-                    "bitcoin-rpc-pass:${cfg.bitcoinRpcPassFile}"
+                    "BITCOIN_RPC_PASS_FILE=${cfg.bitcoinRpcPassFile}"
+                    "RUST_BACKTRACE=1"
+                    "RUST_LOG=info"
                   ];
                 };
               };
