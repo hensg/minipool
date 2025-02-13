@@ -40,13 +40,29 @@
 
         # Build the crate
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-        minipool = craneLib.buildPackage (commonArgs // {
-          inherit cargoArtifacts;
-        });
+        minipool = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+          }
+        );
+        minipool_image = pkgs.dockerTools.buildLayeredImage {
+          name = "minipool";
+          contents = [
+            minipool
+            pkgs.bash
+            pkgs.coreutils
+          ];
+          config = {
+            Cmd = [
+              "${minipool}/bin/minipool"
+            ];
+          };
+        };
       in
       {
         packages = {
-          inherit minipool;
+          inherit minipool minipool_image;
           default = minipool;
         };
 
