@@ -52,6 +52,8 @@
             minipool
             pkgs.bash
             pkgs.coreutils
+            pkgs.busybox
+            pkgs.curl
           ];
           config = {
             Cmd = [
